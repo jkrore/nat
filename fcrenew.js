@@ -1,6 +1,6 @@
-const axios = require('axios');
-const tough = require('tough-cookie');
-const { HttpsProxyAgent } = require('https-proxy-agent');
+import axios from 'axios';
+import tough from 'tough-cookie';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // 青龙/本地 环境变量
 let freecloudAccounts = process.env.FREECLOUD_ACCOUNTS;
@@ -55,20 +55,16 @@ class FreeCloud {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'Referer': 'https://nat.freecloud.ltd/login'
                 },
-                // Don't follow redirects automatically, so we can see the result
                 maxRedirects: 0, 
                 validateStatus: function (status) {
-                    // We expect a 302 redirect on successful login
                     return status >= 200 && status < 400; 
                 },
             });
 
-            // Successful login redirects to clientarea
             if (response.status === 302 && response.headers.location.includes('clientarea')) {
                 await this.log(`✅ 账号 [${this.username}] 登录成功`);
                 return true;
             } else {
-                // Handle cases where login page returns 200 OK with an error message
                 if (response.data && response.data.includes('密码错误')) {
                      await this.log(`❌ 账号 [${this.username}] 登录失败: 密码错误`);
                 } else {
@@ -83,10 +79,9 @@ class FreeCloud {
     }
 
     async checkIn() {
-        // This is the new check-in logic that bypasses the math problem
         const checkInUrl = 'https://nat.freecloud.ltd/addons?_plugin=19&_controller=index&_action=index';
         const checkInData = new URLSearchParams({
-            uid: this.port // The 'port' from config is the 'uid' for the request
+            uid: this.port
         }).toString();
 
         try {
@@ -94,7 +89,7 @@ class FreeCloud {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'Referer': checkInUrl,
-                    'X-Requested-With': 'XMLHttpRequest' // Important header for AJAX requests
+                    'X-Requested-With': 'XMLHttpRequest'
                 }
             });
 
@@ -125,7 +120,6 @@ class FreeCloud {
         if (!loginSuccess) {
             return { success: false, message: '登录失败' };
         }
-        // Wait a bit after login
         await new Promise(resolve => setTimeout(resolve, 2000)); 
         return await this.checkIn();
     }
@@ -162,7 +156,6 @@ async function main() {
 
     console.log(`\n📊 处理结果: 总计 ${accounts.length} 个账号, 成功 ${successCount} 个, 失败 ${failCount} 个`);
     if (failCount > 0) {
-        // Exit with a non-zero code to indicate failure in GitHub Actions
         process.exit(1);
     }
 }
