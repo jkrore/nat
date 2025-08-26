@@ -25,7 +25,7 @@ class FreeCloud {
             withCredentials: true,
             jar: this.cookieJar,
             headers: {
-                'User-Agent': userAgent, // 加上这件伪装外套
+                'User-Agent': userAgent,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                 'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
                 'DNT': '1',
@@ -64,7 +64,6 @@ class FreeCloud {
                 return false;
             }
         } catch (error) {
-            // 捕获像403这样的错误
             if (error.response) {
                  await this.log(`❌ 账号 [${this.username}] 登录请求失败: 网站拒绝访问 (状态码 ${error.response.status})`);
             } else {
@@ -141,4 +140,17 @@ async function main() {
         console.log(`\n🚀 开始处理账号: [${account.username}]`);
         const client = new FreeCloud(account);
         const result = await client.run();
-        if (result.s
+        if (result.success) {
+            successCount++;
+        } else {
+            failCount++;
+        }
+    }
+
+    console.log(`\n📊 处理结果: 总计 ${accounts.length} 个账号, 成功 ${successCount} 个, 失败 ${failCount} 个`);
+    if (failCount > 0) {
+        process.exit(1);
+    }
+}
+
+main();
