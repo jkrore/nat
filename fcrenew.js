@@ -2,38 +2,35 @@ import axios from 'axios';
 import tough from 'tough-cookie';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-// 青龙/本地 环境变量
-let freecloudAccounts = process.env.FREECLOUD_ACCOUNTS;
-let freecloudApiKey = process.env.FREECLOUD_API_KEY;
-let telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-let telegramChatId = process.env.TELEGRAM_CHAT_ID;
-let proxyUrl = process.env.PROXY_URL; // 支持代理
+// 环境变量
+let freecloudAccounts = process.env.FREECLOUD_ACCOUNTS || process.env.INPUT_FREECLOUD_ACCOUNTS;
+let freecloudApiKey = process.env.FREECLOUD_API_KEY || process.env.INPUT_FREECLOUD_API_KEY;
+let telegramBotToken = process.env.TELEGRAM_BOT_TOKEN || process.env.INPUT_TELEGRAM_BOT_TOKEN;
+let telegramChatId = process.env.TELEGRAM_CHAT_ID || process.env.INPUT_TELEGRAM_CHAT_ID;
+let proxyUrl = process.env.PROXY_URL || process.env.INPUT_PROXY_URL;
 
-// Github Actions 环境变量
-if (!freecloudAccounts) {
-    freecloudAccounts = process.env.INPUT_FREECLOUD_ACCOUNTS;
-    freecloudApiKey = process.env.INPUT_FREECLOUD_API_KEY;
-    telegramBotToken = process.env.INPUT_TELEGRAM_BOT_TOKEN;
-    telegramChatId = process.env.INPUT_TELEGRAM_CHAT_ID;
-    proxyUrl = process.env.INPUT_PROXY_URL;
-}
-
-const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36";
+// 伪装成一个真实的Chrome浏览器
+const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 class FreeCloud {
     constructor(account) {
         this.type = account.type;
         this.username = account.username;
         this.password = account.password;
-        this.port = account.port; // 对于 nat.freecloud, port 就是 uid
+        this.port = account.port;
         this.cookieJar = new tough.CookieJar();
+        
+        // 在这里进行终极伪装
         this.axiosInstance = axios.create({
             withCredentials: true,
             jar: this.cookieJar,
             headers: {
-                'User-Agent': userAgent,
+                'User-Agent': userAgent, // 加上这件伪装外套
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+                'DNT': '1',
+                'Upgrade-Insecure-Requests': '1'
             },
-            // 支持代理
             httpsAgent: proxyUrl ? new HttpsProxyAgent(proxyUrl) : null,
         });
     }
@@ -56,33 +53,30 @@ class FreeCloud {
                     'Referer': 'https://nat.freecloud.ltd/login'
                 },
                 maxRedirects: 0, 
-                validateStatus: function (status) {
-                    return status >= 200 && status < 400; 
-                },
+                validateStatus: (status) => status >= 200 && status < 400,
             });
 
-            if (response.status === 302 && response.headers.location.includes('clientarea')) {
+            if (response.status === 302 && response.headers.location && response.headers.location.includes('clientarea')) {
                 await this.log(`✅ 账号 [${this.username}] 登录成功`);
                 return true;
             } else {
-                if (response.data && response.data.includes('密码错误')) {
-                     await this.log(`❌ 账号 [${this.username}] 登录失败: 密码错误`);
-                } else {
-                     await this.log(`❌ 账号 [${this.username}] 登录失败: 凭据无效或未知错误`);
-                }
+                await this.log(`❌ 账号 [${this.username}] 登录失败: 凭据无效或网站返回非预期响应`);
                 return false;
             }
         } catch (error) {
-            await this.log(`❌ 账号 [${this.username}] 登录请求失败: ${error.message}`);
+            // 捕获像403这样的错误
+            if (error.response) {
+                 await this.log(`❌ 账号 [${this.username}] 登录请求失败: 网站拒绝访问 (状态码 ${error.response.status})`);
+            } else {
+                 await this.log(`❌ 账号 [${this.username}] 登录请求失败: ${error.message}`);
+            }
             return false;
         }
     }
 
     async checkIn() {
         const checkInUrl = 'https://nat.freecloud.ltd/addons?_plugin=19&_controller=index&_action=index';
-        const checkInData = new URLSearchParams({
-            uid: this.port
-        }).toString();
+        const checkInData = new URLSearchParams({ uid: this.port }).toString();
 
         try {
             const response = await this.axiosInstance.post(checkInUrl, checkInData, {
@@ -147,17 +141,4 @@ async function main() {
         console.log(`\n🚀 开始处理账号: [${account.username}]`);
         const client = new FreeCloud(account);
         const result = await client.run();
-        if (result.success) {
-            successCount++;
-        } else {
-            failCount++;
-        }
-    }
-
-    console.log(`\n📊 处理结果: 总计 ${accounts.length} 个账号, 成功 ${successCount} 个, 失败 ${failCount} 个`);
-    if (failCount > 0) {
-        process.exit(1);
-    }
-}
-
-main();
+        if (result.s
