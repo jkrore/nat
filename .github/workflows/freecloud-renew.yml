@@ -2,71 +2,30 @@ name: FreeCloud 自动续期
 
 on:
   workflow_dispatch:
-    inputs:
-      force_run:
-        description: '跳过延迟执行'
-        required: false
-        default: true
-        type: boolean
   schedule:
-    - cron: "2 8 * * *"  # 每天早上10点（UTC+8北京时间）执行，为了保证你的定时续期任务能成功执行，强烈建议大家随机修改这个定时时间，比如将 "2 1 * * *"，将1修改为0~16都可以，不一定要跟我一样
+    - cron: '15 0 * * *' # 北京时间早上8点15分
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          ref: main  # 确保检出main分支
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: 设置 Node.js 环境
-        uses: actions/setup-node@v4
+      - name: 设置 Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: '18'
+
+      - name: 安装浏览器依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgbm-dev libnss3 libxss1 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdbus-1-3 libgdk-pixbuf2.0-0 libgtk-3-0 libnspr4 libpango-1.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libcairo2 libfontconfig1 libpangocairo-1.0-0
 
       - name: 安装依赖
-        run: npm install node-fetch@2
-
-      - name: 智能分散延迟执行
-        id: delay_step
-        run: |
-          # 检查是否为手动跳过延迟执行
-          if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
-            echo "🔧 手动执行且跳过延迟，立即开始续期"
-            echo "delay_seconds=0" >> $GITHUB_OUTPUT
-            echo "delay_type=手动跳过延迟" >> $GITHUB_OUTPUT
-          else
-            # 基于用户名哈希的精确秒级分散延迟（0-8分钟，480秒）
-            USER_HASH=$(echo "${{ github.actor }}" | md5sum | cut -c1-6)
-            echo "🔍 用户哈希标识: $USER_HASH"
-
-            # 将6位十六进制哈希转换为延迟秒数（0-480秒，即0-8分钟）
-            DELAY=$((0x$USER_HASH % 480))
-
-            # 计算分钟和秒数用于显示
-            MINUTES=$(($DELAY / 60))
-            SECONDS=$(($DELAY % 60))
-
-            echo "⏰ 智能分散延迟 $DELAY 秒 ($MINUTES 分钟 $SECONDS 秒)"
-            echo "📊 基于用户名哈希的确定性延迟（0-8分钟），避免同时执行冲突"
-            echo "delay_seconds=$DELAY" >> $GITHUB_OUTPUT
-            echo "delay_type=智能分散延迟" >> $GITHUB_OUTPUT
-            sleep $DELAY
-          fi
+        run: npm install
 
       - name: 执行 FreeCloud 续期
-        run: node fcrenew.js
         env:
-          # Telegram 通知配置 (可选)
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || vars.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || vars.TELEGRAM_CHAT_ID }}
-
-          # FreeCloud 配置 (必需)
-          FREECLOUD_ACCOUNTS: ${{ secrets.FREECLOUD_ACCOUNTS || vars.FREECLOUD_ACCOUNTS }}
-          FREECLOUD_API_KEY: ${{ secrets.FREECLOUD_API_KEY || vars.FREECLOUD_API_KEY }}
-
-          # 延迟信息
-          DELAY_SECONDS: ${{ steps.delay_step.outputs.delay_seconds }}
-          DELAY_TYPE: ${{ steps.delay_step.outputs.delay_type }}
+          FREECLOUD_ACCOUNTS: ${{ secrets.FREECLOUD_ACCOUNTS }}
+        run: npm start
