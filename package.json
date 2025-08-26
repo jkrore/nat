@@ -1,25 +1,15 @@
 {
-  "name": "freecloud-auto-renew",
+  "name": "freecloud-renew",
   "version": "1.0.0",
-  "description": "FreeCloud 自动续期系统 - 基于 GitHub Actions",
+  "description": "FreeCloud Auto Renew Script",
   "main": "fcrenew.js",
   "type": "module",
   "scripts": {
-    "start": "node fcrenew.js",
-    "renew": "node fcrenew.js"
+    "start": "node fcrenew.js"
   },
-  "keywords": [
-    "freecloud",
-    "auto-renew",
-    "github-actions",
-    "cloudflare-worker"
-  ],
-  "author": "FreeCloud Auto Renew System",
-  "license": "MIT",
   "dependencies": {
-    "node-fetch": "^2.7.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "axios": "^1.7.2",
+    "tough-cookie": "^4.1.4",
+    "https-proxy-agent": "^7.0.5"
   }
 }
