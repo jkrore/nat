@@ -8,7 +8,7 @@
     "start": "node fcrenew.js"
   },
   "dependencies": {
-    "puppeteer-core": "^21.0.0",
-    "chrome-aws-lambda": "^10.1.0"
+    "puppeteer-core": "19.11.1",
+    "chrome-aws-lambda": "10.1.0"
   }
 }
