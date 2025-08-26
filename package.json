@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "main": "fcrenew.js",
   "type": "module",
+  "scripts": {
+    "start": "node fcrenew.js"
+  },
   "dependencies": {
     "node-fetch": "^3.3.2"
   }
