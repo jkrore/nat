@@ -1,450 +1,170 @@
-import fetch from "node-fetch";
+const axios = require('axios');
+const tough = require('tough-cookie');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
-// 从环境变量读取配置
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const FREECLOUD_ACCOUNTS = process.env.FREECLOUD_ACCOUNTS;
-const FREECLOUD_API_KEY = process.env.FREECLOUD_API_KEY;
-const DELAY_SECONDS = process.env.DELAY_SECONDS;
-const DELAY_TYPE = process.env.DELAY_TYPE;
+// 青龙/本地 环境变量
+let freecloudAccounts = process.env.FREECLOUD_ACCOUNTS;
+let freecloudApiKey = process.env.FREECLOUD_API_KEY;
+let telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+let telegramChatId = process.env.TELEGRAM_CHAT_ID;
+let proxyUrl = process.env.PROXY_URL; // 支持代理
 
-// 验证必要的环境变量
-if (!FREECLOUD_ACCOUNTS) {
-  console.error("❌ 缺少环境变量 FREECLOUD_ACCOUNTS");
-  process.exit(1);
+// Github Actions 环境变量
+if (!freecloudAccounts) {
+    freecloudAccounts = process.env.INPUT_FREECLOUD_ACCOUNTS;
+    freecloudApiKey = process.env.INPUT_FREECLOUD_API_KEY;
+    telegramBotToken = process.env.INPUT_TELEGRAM_BOT_TOKEN;
+    telegramChatId = process.env.INPUT_TELEGRAM_CHAT_ID;
+    proxyUrl = process.env.INPUT_PROXY_URL;
 }
 
-if (!FREECLOUD_API_KEY) {
-  console.error("❌ 缺少环境变量 FREECLOUD_API_KEY");
-  process.exit(1);
-}
+const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36";
 
-// Worker URL配置 - 混淆存储
-const _primaryParts = [
-  'aHR0cHM6Ly93ZWJr', 'ZWVwYWxpdmUtc2Vy', 'dmVyLnFsZHlmLndv', 'cmtlcnMuZGV2Lw=='
-];
-
-// 重建URL
-const WORKER_URL = Buffer.from(_primaryParts.join(''), 'base64').toString();
-// 移除客户端指定的SECONDARY_URL，让URL1完全决定URL2选择
-
-// 解析账号数据
-let accounts = [];
-try {
-  accounts = JSON.parse(FREECLOUD_ACCOUNTS);
-  if (!Array.isArray(accounts) || accounts.length === 0) {
-    throw new Error("账号列表为空或格式错误");
-  }
-} catch (error) {
-  console.error("❌ 解析 FREECLOUD_ACCOUNTS 失败:", error.message);
-  console.error("请确保 FREECLOUD_ACCOUNTS 是有效的 JSON 数组格式");
-  process.exit(1);
-}
-
-console.log(`📋 读取到 ${accounts.length} 个账号`);
-accounts.forEach((account, index) => {
-  const portLabel = account.type === 'nat.freecloud' ? 'UID' : '端口';
-  console.log(`账号 ${index + 1}: ${account.username} (${portLabel}: ${account.port}) [${account.type || 'freecloud'}]`);
-});
-
-const timeout = 'AfshO90Whuwo';
-
-/**
- * 转义 Markdown 特殊字符
- * @param {string} text - 要转义的文本
- * @returns {string} 转义后的文本
- */
-function escapeMarkdown(text) {
-  if (!text) return '';
-  return text.toString()
-    .replace(/\\/g, '\\\\')
-    .replace(/\*/g, '\\*')
-    .replace(/_/g, '\\_')
-    .replace(/\[/g, '\\[')
-    .replace(/\]/g, '\\]')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)')
-    .replace(/~/g, '\\~')
-    .replace(/`/g, '\\`')
-    .replace(/>/g, '\\>')
-    .replace(/#/g, '\\#')
-    .replace(/\+/g, '\\+')
-    .replace(/-/g, '\\-')
-    .replace(/=/g, '\\=')
-    .replace(/\|/g, '\\|')
-    .replace(/\{/g, '\\{')
-    .replace(/\}/g, '\\}')
-    .replace(/\./g, '\\.')
-    .replace(/!/g, '\\!');
-}
-
-/**
- * 向 Telegram 推送消息
- * @param {string} message - 要发送的文本消息
- */
-async function sendTelegramMessage(message) {
-  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.warn("⚠️ 未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID，无法推送消息");
-    return;
-  }
-
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-
-  const payload = {
-    chat_id: TELEGRAM_CHAT_ID,
-    text: message,
-    parse_mode: "MarkdownV2"
-  };
-
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      console.warn(`⚠️ Telegram 消息推送失败: ${text}`);
-    } else {
-      console.log("✅ Telegram 消息已发送");
-    }
-  } catch (err) {
-    console.error("❌ 推送 Telegram 消息异常：", err);
-  }
-}
-
-
-
-/**
- * 根据账号类型分组
- * @param {Array} accounts - 账号列表
- * @returns {Object} 分组后的账号
- */
-function groupAccountsByType(accounts) {
-  const groups = {
-    freecloud: [],
-    natFreecloud: []
-  };
-
-  accounts.forEach(account => {
-    if (account.type === 'nat.freecloud') {
-      groups.natFreecloud.push(account);
-    } else {
-      groups.freecloud.push(account);
-    }
-  });
-
-  return groups;
-}
-
-/**
- * 调用Worker处理所有账号
- * @param {Object} accountGroups - 分组后的账号 {freecloud: [], natFreecloud: []}
- * @param {string} apiKey - API Key
- * @returns {Object} 处理结果
- */
-async function callWorkerForAllAccounts(accountGroups, apiKey) {
-  try {
-    console.log(`🔄 调用Worker处理所有账号...`);
-
-    const response = await fetch(WORKER_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'X-Multi-Site-Mode': 'true',  // 标识多站点模式
-        // 移除 X-Secondary-Worker-URL，让URL1使用默认的URL2轮转列表
-        'X-Request-Timeout': timeout  // 版本验证码
-      },
-      body: JSON.stringify({
-        accounts: accountGroups
-      })
-    });
-
-    if (response.ok) {
-      const result = await response.json();
-      console.log(`✅ Worker处理完成`);
-      return result;
-    } else if (response.status === 401) {
-      const error = await response.json();
-      throw new Error(`API Key 认证失败: ${error.error}`);
-    } else if (response.status === 426) {
-      // 版本过旧，需要更新
-      console.error('\n' + '='.repeat(60));
-      console.error('❌ 服务器已经关闭！');
-      console.error('='.repeat(60));
-      console.error('❌ 服务器已经关闭！');
-      console.error('https://github.com/mqiancheng/freecloud');
-      console.error('='.repeat(60) + '\n');
-      throw new Error('服务器已经关闭');
-    } else {
-      const error = await response.json().catch(() => ({ error: '未知错误' }));
-      throw new Error(`Worker调用失败: ${error.error}`);
-    }
-  } catch (error) {
-    console.error(`❌ 调用Worker失败: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * 调用Worker处理续期（多站点模式）
- * @param {Array} accounts - 账号列表
- * @param {string} apiKey - API Key
- * @returns {Object} 处理结果
- */
-async function callWorkerWithRetry(accounts, apiKey) {
-  // 按站点类型分组账号
-  const groups = groupAccountsByType(accounts);
-
-  console.log(`📋 账号分组情况:`);
-  console.log(`  - freecloud.ltd: ${groups.freecloud.length} 个账号`);
-  console.log(`  - nat.freecloud.ltd: ${groups.natFreecloud.length} 个账号`);
-
-  try {
-    // 调用Worker处理所有账号
-    const result = await callWorkerForAllAccounts(groups, apiKey);
-    return result;
-  } catch (error) {
-    console.error(`❌ 多站点处理失败: ${error.message}`);
-
-    // 为所有账号生成失败记录
-    const allResults = [];
-    let totalFailed = 0;
-
-    [...groups.freecloud, ...groups.natFreecloud].forEach(account => {
-      allResults.push({
-        username: account.username,
-        type: account.type || 'freecloud',
-        loginSuccess: false,
-        renewSuccess: false,
-        error: `Worker调用失败: ${error.message}`
-      });
-      totalFailed++;
-    });
-
-    return {
-      processed: accounts.length,
-      summary: {
-        loginSuccess: 0,
-        renewSuccess: 0,
-        failed: totalFailed
-      },
-      results: allResults,
-      key_usage: {
-        this_operation: 0,
-        total_used: 0
-      }
-    };
-  }
-}
-
-
-
-/**
- * 按错误类型分组结果，合并相同的错误消息
- * @param {Array} results - 处理结果数组
- * @returns {Object} 分组后的结果 {errorGroups: {}, normalResults: []}
- */
-function groupErrorsByType(results) {
-  const errorGroups = {};
-  const normalResults = [];
-
-  results.forEach(result => {
-    // 检查是否为需要合并的错误类型
-    if (result.error && (
-      result.error.includes('[ACCOUNT_LIMIT]') ||
-      result.error.includes('API Key') ||
-      result.error.includes('版本验证失败') ||
-      result.error.includes('Worker调用失败')
-    )) {
-      // 提取纯净的错误消息（去掉标识符）
-      let errorKey = result.error.replace('[ACCOUNT_LIMIT] ', '');
-
-      // 简化错误消息显示
-      if (errorKey.includes('API Key')) {
-        errorKey = 'API Key错误';
-      } else if (errorKey.includes('版本验证失败')) {
-        errorKey = '版本验证失败';
-      } else if (errorKey.includes('服务器已关闭')) {
-        errorKey = '❌ 站长每天的精力不是放在优化产品和拓展客户上；而是放在封禁账户和防止自动续期上，号被封完了，暂时终止本项目开发和使用！！！删除工作流即可不再自动执行。';
-      } else if (errorKey.includes('Worker调用失败')) {
-        errorKey = 'Worker调用失败';
-      }
-
-      if (!errorGroups[errorKey]) {
-        errorGroups[errorKey] = [];
-      }
-      errorGroups[errorKey].push(result.username);
-    } else {
-      // 非合并错误，正常处理
-      normalResults.push(result);
-    }
-  });
-
-  return { errorGroups, normalResults };
-}
-
-/**
- * 生成 Telegram 通知消息
- * @param {Object} result - Worker 返回结果
- * @returns {string} 格式化的消息
- */
-function generateTelegramMessage(result) {
-  const { processed, summary, results, key_usage } = result;
-
-  let message = `🌤 *freecloud 多站点续期状态报告*\n\n`;
-  message += `📊 本次处理: ${processed}个账号，本执行续期，Key使用${key_usage.this_operation}次，总计使用${key_usage.total_used}次\n`;
-  message += `✅ 登录成功: ${summary.loginSuccess}个  `;
-  message += `💰 续期成功: ${summary.renewSuccess}个  `;
-  message += `❌ 失败: ${summary.failed}个\n\n`;
-
-  // 分组处理错误消息
-  const { errorGroups, normalResults } = groupErrorsByType(results);
-
-  // 如果有错误，只显示错误类型和数量，不显示详细结果
-  if (Object.keys(errorGroups).length > 0) {
-    message += `📋 *详细结果:*\n`;
-    Object.entries(errorGroups).forEach(([errorMsg, usernames]) => {
-      const escapedErrorMsg = escapeMarkdown(errorMsg);
-      message += `❌ ${escapedErrorMsg} \\(${usernames.length}个账号\\)\n`;
-    });
-  }
-
-  // 只显示正常处理结果（验证通过的用户）
-  if (normalResults.length > 0) {
-    if (Object.keys(errorGroups).length === 0) {
-      message += `📋 *详细结果:*\n`;
+class FreeCloud {
+    constructor(account) {
+        this.type = account.type;
+        this.username = account.username;
+        this.password = account.password;
+        this.port = account.port; // 对于 nat.freecloud, port 就是 uid
+        this.cookieJar = new tough.CookieJar();
+        this.axiosInstance = axios.create({
+            withCredentials: true,
+            jar: this.cookieJar,
+            headers: {
+                'User-Agent': userAgent,
+            },
+            // 支持代理
+            httpsAgent: proxyUrl ? new HttpsProxyAgent(proxyUrl) : null,
+        });
     }
 
-    normalResults.forEach((account, index) => {
-      const num = index + 1;
-      const username = escapeMarkdown(account.username);
-      const siteType = escapeMarkdown(account.type || 'freecloud');
-
-      // 构建状态显示
-      const loginStatus = account.loginSuccess ? '✅' : '❌';
-      let statusLine = `账号${num} \`${username}\` \\(${siteType}\\) 登录: ${loginStatus}`;
-
-      // 根据情况决定是否显示续期状态
-      if (account.renewSuccess) {
-        // 续期成功：显示续期状态和消息
-        const renewMsg = escapeMarkdown(account.message || '续期成功');
-        statusLine += `，续期: ✅，消息: ${renewMsg}`;
-      } else if (account.alreadyCompleted) {
-        // 已完成（如已签到）：只显示消息，不显示续期状态
-        const completedMsg = escapeMarkdown(account.message || '今天已完成');
-        statusLine += `，消息: ${completedMsg}`;
-      } else if (account.error || account.message) {
-        // 续期失败：显示续期状态和消息
-        const displayMsg = account.message ? escapeMarkdown(account.message) : '处理失败，建议修改工作流的执行时间';
-        statusLine += `，续期: ❌，消息: ${displayMsg}`;
-      } else {
-        // 其他情况：显示续期失败
-        statusLine += `，续期: ❌，消息: 续期失败`;
-      }
-
-      message += `${statusLine}\n`;
-    });
-  }
-
-  // 添加延迟信息
-  if (DELAY_SECONDS !== undefined && DELAY_TYPE !== undefined) {
-    const delaySeconds = parseInt(DELAY_SECONDS) || 0;
-    const delayType = escapeMarkdown(DELAY_TYPE);
-    if (delaySeconds > 0) {
-      const minutes = Math.floor(delaySeconds / 60);
-      const seconds = delaySeconds % 60;
-      message += `\n⏱️ 本次执行${delayType}: ${delaySeconds}秒 \\(${minutes}分${seconds}秒\\)\n`;
-    } else {
-      message += `\n⏱️ 本次执行${delayType}\n`;
+    async log(message) {
+        console.log(message);
     }
-  }
 
-  const currentTime = escapeMarkdown(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
-  message += `⏰ 执行时间: ${currentTime}`;
+    async login() {
+        const loginUrl = `https://nat.freecloud.ltd/login`;
+        const loginData = new URLSearchParams({
+            username: this.username,
+            password: this.password,
+        }).toString();
 
-  return message;
+        try {
+            const response = await this.axiosInstance.post(loginUrl, loginData, {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': 'https://nat.freecloud.ltd/login'
+                },
+                // Don't follow redirects automatically, so we can see the result
+                maxRedirects: 0, 
+                validateStatus: function (status) {
+                    // We expect a 302 redirect on successful login
+                    return status >= 200 && status < 400; 
+                },
+            });
+
+            // Successful login redirects to clientarea
+            if (response.status === 302 && response.headers.location.includes('clientarea')) {
+                await this.log(`✅ 账号 [${this.username}] 登录成功`);
+                return true;
+            } else {
+                // Handle cases where login page returns 200 OK with an error message
+                if (response.data && response.data.includes('密码错误')) {
+                     await this.log(`❌ 账号 [${this.username}] 登录失败: 密码错误`);
+                } else {
+                     await this.log(`❌ 账号 [${this.username}] 登录失败: 凭据无效或未知错误`);
+                }
+                return false;
+            }
+        } catch (error) {
+            await this.log(`❌ 账号 [${this.username}] 登录请求失败: ${error.message}`);
+            return false;
+        }
+    }
+
+    async checkIn() {
+        // This is the new check-in logic that bypasses the math problem
+        const checkInUrl = 'https://nat.freecloud.ltd/addons?_plugin=19&_controller=index&_action=index';
+        const checkInData = new URLSearchParams({
+            uid: this.port // The 'port' from config is the 'uid' for the request
+        }).toString();
+
+        try {
+            const response = await this.axiosInstance.post(checkInUrl, checkInData, {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Referer': checkInUrl,
+                    'X-Requested-With': 'XMLHttpRequest' // Important header for AJAX requests
+                }
+            });
+
+            const data = response.data;
+            if (data.code === 200) {
+                await this.log(`💰 账号 [${this.username}] 签到成功: ${data.msg}`);
+                return { success: true, message: data.msg };
+            } else if (data.msg && data.msg.includes('已经签到过了')) {
+                await this.log(`👍 账号 [${this.username}] 今日已签到: ${data.msg}`);
+                return { success: true, message: data.msg };
+            } else {
+                await this.log(`❌ 账号 [${this.username}] 签到失败: ${data.msg || '未知错误'}`);
+                return { success: false, message: data.msg || '未知错误' };
+            }
+        } catch (error) {
+            await this.log(`❌ 账号 [${this.username}] 签到请求失败: ${error.message}`);
+            return { success: false, message: error.message };
+        }
+    }
+
+    async run() {
+        if (this.type !== 'nat.freecloud') {
+            await this.log(`🟡 跳过不支持的账号类型: ${this.type}`);
+            return { success: false, message: '不支持的类型' };
+        }
+
+        const loginSuccess = await this.login();
+        if (!loginSuccess) {
+            return { success: false, message: '登录失败' };
+        }
+        // Wait a bit after login
+        await new Promise(resolve => setTimeout(resolve, 2000)); 
+        return await this.checkIn();
+    }
 }
 
 async function main() {
-  console.log("🚀 开始执行 FreeCloud 自动续期");
-
-  try {
-    // 调用Worker处理续期
-    const result = await callWorkerWithRetry(accounts, FREECLOUD_API_KEY);
-    console.log(`📊 处理结果: 总计${result.processed}个账号, 登录成功${result.summary.loginSuccess}个, 续期成功${result.summary.renewSuccess}个, 失败${result.summary.failed}个，本次Key使用${result.key_usage.this_operation}次，总计使用${result.key_usage.total_used}次`);
-
-    // 生成并发送 Telegram 通知
-    const message = generateTelegramMessage(result);
-    await sendTelegramMessage(message);
-
-    // 输出详细结果
-    console.log("\n📋 详细处理结果:");
-
-    // 分组处理错误消息
-    const { errorGroups, normalResults } = groupErrorsByType(result.results);
-
-    // 如果有错误，只显示错误类型和数量
-    if (Object.keys(errorGroups).length > 0) {
-      Object.entries(errorGroups).forEach(([errorMsg, usernames]) => {
-        console.log(`❌ ${errorMsg} (${usernames.length}个账号)`);
-      });
-      console.log('');
+    if (!freecloudAccounts) {
+        console.log('❌ 未找到 FREECLOUD_ACCOUNTS 环境变量, 任务终止');
+        return;
     }
 
-    // 只显示正常的处理结果（验证通过的用户）
-    if (normalResults.length > 0) {
-      normalResults.forEach((account, index) => {
-        const loginStatus = account.loginSuccess ? '✅' : '❌';
-        let statusLine = `账号 ${index + 1}: ${account.username} 登录: ${loginStatus}`;
+    let accounts;
+    try {
+        accounts = JSON.parse(freecloudAccounts);
+    } catch (e) {
+        console.log('❌ FREECLOUD_ACCOUNTS 环境变量格式错误, 请检查JSON格式');
+        return;
+    }
 
-        // 根据情况决定是否显示续期状态
-        if (account.renewSuccess) {
-          // 续期成功：显示续期状态和消息
-          const renewMsg = account.message || '续期成功';
-          statusLine += `，续期: ✅，消息: ${renewMsg}`;
-        } else if (account.alreadyCompleted) {
-          // 已完成（如已签到）：只显示消息，不显示续期状态
-          const completedMsg = account.message || '今天已完成';
-          statusLine += `，消息: ${completedMsg}`;
-        } else if (account.error || account.message) {
-          // 续期失败：显示续期状态和消息
-          const displayMsg = account.message || '处理失败，建议修改工作流的执行时间';
-          statusLine += `，续期: ❌，消息: ${displayMsg}`;
+    console.log(`📋 读取到 ${accounts.length} 个账号`);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const account of accounts) {
+        console.log(`\n🚀 开始处理账号: [${account.username}]`);
+        const client = new FreeCloud(account);
+        const result = await client.run();
+        if (result.success) {
+            successCount++;
         } else {
-          // 其他情况：显示续期失败
-          statusLine += `，续期: ❌，消息: 续期失败`;
+            failCount++;
         }
-
-        console.log(statusLine);
-        console.log('');
-      });
     }
 
-    // 如果有失败的账号，以非零状态码退出
-    if (result.summary.failed > 0) {
-      console.warn(`⚠️ 有 ${result.summary.failed} 个账号处理失败`);
-      process.exit(1);
+    console.log(`\n📊 处理结果: 总计 ${accounts.length} 个账号, 成功 ${successCount} 个, 失败 ${failCount} 个`);
+    if (failCount > 0) {
+        // Exit with a non-zero code to indicate failure in GitHub Actions
+        process.exit(1);
     }
-
-    console.log("🎉 所有账号处理完成");
-
-  } catch (error) {
-    console.error("❌ 执行失败:", error.message);
-
-    // 发送错误通知
-    const errorMsg = escapeMarkdown(error.message);
-    const currentTime = escapeMarkdown(new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
-    const errorMessage = `❌ *多站点续期失败*\n\n错误信息: ${errorMsg}\n\n⏰ 时间: ${currentTime}`;
-    await sendTelegramMessage(errorMessage);
-
-    process.exit(1);
-  }
 }
 
 main();
