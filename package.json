@@ -1,14 +1,9 @@
 {
-  "name": "freecloud-puppeteer-renew",
+  "name": "freecloud-cookie-renew",
   "version": "1.0.0",
-  "description": "Puppeteer-based FreeCloud Auto Renew Script",
   "main": "fcrenew.js",
   "type": "module",
-  "scripts": {
-    "start": "node fcrenew.js"
-  },
   "dependencies": {
-    "puppeteer-core": "19.11.1",
-    "chrome-aws-lambda": "10.1.0"
+    "node-fetch": "^3.3.2"
   }
 }
